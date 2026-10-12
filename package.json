@@ -4,8 +4,13 @@
   "description": "Code for \"Principles of Programming Languages\" course",
   "main": "index.js",
   "scripts": {
-    "test": "mocha --require ts-node/register test/**/*.test.ts",
-    "coverage": "nyc --reporter=html npm test"
+    "test": "mocha \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --project tsconfig.json",
+    "coverage": "nyc --reporter=html npm test",
+    "demo:semantics-lab": "node -r ts-node/register ./semantics-lab.ts",
+    "example:python": "node -r ts-node/register ./semantics-lab.ts --example python",
+    "example:all": "node -r ts-node/register ./semantics-lab.ts --example all"
   },
   "keywords": [],
   "author": "Michael Elhadad",

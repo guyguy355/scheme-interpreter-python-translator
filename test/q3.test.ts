@@ -1,11 +1,11 @@
 import { parseL3, parseL3Exp } from '../L3/L3-ast';
 import { l2ToPython } from '../q3';
-import { bind, Result, makeOk } from '../shared/result';
+import { bind, Result, makeOk, makeFailure } from '../shared/result';
 import { expect } from 'chai';
-import { parse as p } from "../shared/parser";
+import { parse as p } from '../shared/parser';
 
 const l2ToPythonResult = (x: string): Result<string> =>
-    bind(bind(p(x),parseL3Exp),l2ToPython);
+    bind(bind(p(x), parseL3Exp), l2ToPython);
 
 
 describe('Q4 Tests', () => {
@@ -15,8 +15,19 @@ describe('Q4 Tests', () => {
          expect(l2ToPythonResult(`(= 3 (+ 1 2))`)).to.deep.equal(makeOk(`(3 == (1 + 2))`));
      });
 
+     it('preserves Scheme-style truthiness in translated conditions', () => {
+         expect(l2ToPythonResult(`(if 0 1 2)`)).to.deep.equal(makeOk(`(1 if (0 is not False) else 2)`));
+         expect(l2ToPythonResult(`(not 0)`)).to.deep.equal(makeOk(`(0 is False)`));
+     });
+
+     it('rejects unsupported or invalid Python generation', () => {
+         expect(l2ToPythonResult(`(number? 3)`)).to.deep.equal(makeFailure('Unsupported primitive in Python translation: number?'));
+         expect(l2ToPythonResult(`((lambda (x-y) x-y) 3)`)).to.deep.equal(makeFailure('Unsupported identifier for Python translation: x-y'));
+         expect(l2ToPythonResult(`(+)`)).to.deep.equal(makeFailure('Unsupported zero-arity + in Python translation'));
+     });
+
      it('parse "if" expressions', () => {
-         expect(l2ToPythonResult(`(if (> x 3) 4 5)`)).to.deep.equal(makeOk(`(4 if (x > 3) else 5)`));
+         expect(l2ToPythonResult(`(if (> x 3) 4 5)`)).to.deep.equal(makeOk(`(4 if ((x > 3) is not False) else 5)`));
      });
 
      it('parse "lambda" expressions', () => {
@@ -37,6 +48,6 @@ describe('Q4 Tests', () => {
     });
 
    it('program', () => {
-        expect(bind(parseL3(`(L3 (define b (> 3 4)) (define x 5) (define f (lambda (y) (+ x y))) (define g (lambda (y) (* x y))) (if (not b) (f 3) (g 4)) (if (= a b) (f 3) (g 4)) (if (> a b) (f 3) (g 4)) ((lambda (x) (* x x)) 7))`), l2ToPython)).to.deep.equal(makeOk(`b = (3 > 4)\nx = 5\nf = (lambda y : (x + y))\ng = (lambda y : (x * y))\n(f(3) if (not b) else g(4))\n(f(3) if (a == b) else g(4))\n(f(3) if (a > b) else g(4))\n(lambda x : (x * x))(7)`));
+        expect(bind(parseL3(`(L3 (define b (> 3 4)) (define x 5) (define f (lambda (y) (+ x y))) (define g (lambda (y) (* x y))) (if (not b) (f 3) (g 4)) (if (= a b) (f 3) (g 4)) (if (> a b) (f 3) (g 4)) ((lambda (x) (* x x)) 7))`), l2ToPython)).to.deep.equal(makeOk(`b = (3 > 4)\nx = 5\nf = (lambda y : (x + y))\ng = (lambda y : (x * y))\n(f(3) if ((b is False) is not False) else g(4))\n(f(3) if ((a == b) is not False) else g(4))\n(f(3) if ((a > b) is not False) else g(4))\n(lambda x : (x * x))(7)`));
     });
 });

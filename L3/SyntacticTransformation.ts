@@ -8,118 +8,128 @@ import {
 } from "./L3-ast";
 import { makeSymbolSExp } from "./L3-value";
 
-import { Result, makeOk } from "../shared/result";
+import { Result, makeOk, makeFailure, bind, mapResult } from "../shared/result";
 import { map } from "ramda";
 
-const msgVar = makeVarDecl("msg");
-const msgRef = makeVarRef("msg");
+const defaultDispatchVarName = "msg";
+const fallbackDispatchVarName = "methodArg";
 const errorExp = makeLitExp(makeSymbolSExp("error"));
 
-
-// Get the body of a method.
 const getMethodBody = (method: Binding): CExp =>
-    isProcExp(method.val) ? method.val.body[0] : method.val;
+    isProcExp(method.val) ? method.val.body[0] || errorExp : method.val;
 
-
-// Build the test expression for a method name.
-const makeMethodTest = (methodName: string): CExp =>
+const makeMethodTest = (methodName: string, dispatchName: string): CExp =>
     makeAppExp(makePrimOp("eq?"), [
-        msgRef,
+        makeVarRef(dispatchName),
         makeLitExp(makeSymbolSExp(methodName))
     ]);
 
-
-// Build the nested if expressions for the methods.
-const makeMethodIfs = (methods: Binding[]): CExp => {
+const makeMethodIfs = (methods: Binding[], dispatchName: string): CExp => {
     if (methods.length === 0) {
         return errorExp;
     }
 
-    const firstMethod = methods[0];
-    const restMethods = methods.slice(1);
-
+    const [firstMethod, ...restMethods] = methods;
     return makeIfExp(
-        makeMethodTest(firstMethod.var.var),
+        makeMethodTest(firstMethod.var.var, dispatchName),
         getMethodBody(firstMethod),
-        makeMethodIfs(restMethods)
+        makeMethodIfs(restMethods, dispatchName)
     );
 };
 
+export const class2proc = (exp: ClassExp): Result<ProcExp> => {
+    if (exp.fields.length === 0) {
+        return makeFailure("Class desugaring requires at least one field");
+    }
 
-// Transform a class expression into a procedure expression.
-export const class2proc = (exp: ClassExp): ProcExp => {
-    const innerProc = makeProcExp(
-        [msgVar],
-        [makeMethodIfs(exp.methods)]
-    );
+    const dispatchVarName = exp.fields.some((field) => field.var === defaultDispatchVarName)
+        ? fallbackDispatchVarName
+        : defaultDispatchVarName;
 
-    return makeProcExp(
+    const fieldNames = new Set<string>();
+    for (const field of exp.fields) {
+        if (fieldNames.has(field.var)) {
+            return makeFailure(`Duplicate field name: ${field.var}`);
+        }
+        fieldNames.add(field.var);
+    }
+
+    const methodNames = new Set<string>();
+    for (const method of exp.methods) {
+        if (methodNames.has(method.var.var)) {
+            return makeFailure(`Duplicate method name: ${method.var.var}`);
+        }
+        methodNames.add(method.var.var);
+    }
+
+    for (const method of exp.methods) {
+        if (!isProcExp(method.val)) {
+            return makeFailure(`Unsupported method body in class desugaring: ${method.var.var}`);
+        }
+
+        if (method.val.args.length !== 0) {
+            return makeFailure(`Unsupported method signature in class desugaring: ${method.var.var}`);
+        }
+
+        if (method.val.body.length !== 1) {
+            return makeFailure(`Unsupported method body length in class desugaring: ${method.var.var}`);
+        }
+    }
+
+    return makeOk(makeProcExp(
         exp.fields,
-        [innerProc]
-    );
+        [makeProcExp([makeVarDecl(dispatchVarName)], [makeMethodIfs(exp.methods, dispatchVarName)])]
+    ));
 };
 
-
-// Transform a compound expression and remove class expressions.
-const transformCExp = (exp: CExp): CExp => {
+const transformCExp = (exp: CExp): Result<CExp> => {
     if (isClassExp(exp)) {
-        return class2proc(exp);
+        return bind(class2proc(exp), (v: ProcExp) => makeOk(v));
     }
 
     if (isIfExp(exp)) {
-        return makeIfExp(
-            transformCExp(exp.test),
-            transformCExp(exp.then),
-            transformCExp(exp.alt)
-        );
+        return bind(transformCExp(exp.test), (test: CExp) =>
+            bind(transformCExp(exp.then), (then: CExp) =>
+                bind(transformCExp(exp.alt), (alt: CExp) =>
+                    makeOk(makeIfExp(test, then, alt)))));
     }
 
     if (isProcExp(exp)) {
-        return makeProcExp(
-            exp.args,
-            map(transformCExp, exp.body)
-        );
+        return bind(mapResult(transformCExp, exp.body), (body: CExp[]) =>
+            makeOk(makeProcExp(exp.args, body)));
     }
 
     if (isLetExp(exp)) {
-        const newBindings = map((b: Binding) =>
-            makeBinding(b.var.var, transformCExp(b.val)), exp.bindings);
-
-        const newBody = map(transformCExp, exp.body);
-
-        return {
-            ...exp,
-            bindings: newBindings,
-            body: newBody
-        };
+        return bind(mapResult((b: Binding) =>
+            bind(transformCExp(b.val), (val: CExp) => makeOk(makeBinding(b.var.var, val))), exp.bindings),
+            (bindings: Binding[]) =>
+                bind(mapResult(transformCExp, exp.body), (body: CExp[]) =>
+                    makeOk({ ...exp, bindings, body })));
     }
 
     if (isAppExp(exp)) {
-        return makeAppExp(
-            transformCExp(exp.rator),
-            map(transformCExp, exp.rands)
-        );
+        return bind(transformCExp(exp.rator), (rator: CExp) =>
+            bind(mapResult(transformCExp, exp.rands), (rands: CExp[]) =>
+                makeOk(makeAppExp(rator, rands))));
     }
 
-    return exp;
+    return makeOk(exp);
 };
 
-
-// Transform one expression.
-const transformExp = (exp: Exp): Exp => {
+const transformExp = (exp: Exp): Result<Exp> => {
     if (isDefineExp(exp)) {
-        return makeDefineExp(exp.var, transformCExp(exp.val));
+        return bind(transformCExp(exp.val), (val: CExp) =>
+            makeOk(makeDefineExp(exp.var, val)));
     }
 
     return transformCExp(exp);
 };
 
-
-// Transform a full program or one expression.
 export const transform = (exp: Exp | Program): Result<Exp | Program> => {
     if (isProgram(exp)) {
-        return makeOk(makeProgram(map(transformExp, exp.exps)));
+        return bind(mapResult(transformExp, exp.exps), (exps: Exp[]) =>
+            makeOk(makeProgram(exps)));
     }
 
-    return makeOk(transformExp(exp));
+    return transformExp(exp);
 };

@@ -63,6 +63,10 @@ const applyProcedure = (proc: Value, args: Value[]): Result<Value> =>
     makeFailure(`Bad procedure ${format(proc)}`);
 
 const applyClosure = (proc: Closure, args: Value[]): Result<Value> => {
+    if (proc.params.length !== args.length) {
+        return makeFailure(`Wrong number of arguments for closure: expected ${proc.params.length}, received ${args.length}`);
+    }
+
     const vars = map((v: VarDecl) => v.var, proc.params);
     return evalSequence(proc.body, makeExtEnv(vars, args, proc.env));
 }
